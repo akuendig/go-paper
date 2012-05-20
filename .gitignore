@@ -17,3 +17,5 @@ _cgo_export.*
 _testmain.go
 *.exe
 /*.sublime-*
+
+secrets.go
