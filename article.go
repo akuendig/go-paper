@@ -77,13 +77,19 @@ func xmlExtract(reader io.Reader) string {
 	doc := xml.NewDecoder(reader)
 	doc.Strict = false
 
-	readUntilElement("body", doc)
+	node, err := readUntilElement("div", "singleLeft", doc)
+
+	if err != nil {
+		log.Println(err)
+	} else {
+		log.Println(node.(xml.StartElement))
+	}
 
 	return ""
 }
 
-func readUntilElement(name string, doc *xml.Decoder) (*xml.StartElement, error) {
-	for i := 0; i < 10; i++ {
+func readUntilElement(name, id string, doc *xml.Decoder) (xml.Token, error) {
+	for {
 		token, err := doc.Token()
 
 		if err != nil {
@@ -91,10 +97,19 @@ func readUntilElement(name string, doc *xml.Decoder) (*xml.StartElement, error) 
 		}
 
 		switch t := token.(type) {
-		case *xml.StartElement:
-			log.Println("StartElement", t.Name)
-			if t.Name.Local == name {
+		case xml.StartElement:
+			if t.Name.Local != name {
+				break
+			}
+
+			if id == "" {
 				return t, nil
+			}
+
+			for _, attr := range t.Attr {
+				if attr.Name.Local == "id" && attr.Value == id {
+					return t, nil
+				}
 			}
 		case xml.EndElement:
 			// log.Println("EndElement")
