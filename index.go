@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-
 //"github.com/hoisie/web"
 // "fmt"
 )
@@ -13,13 +12,20 @@ import (
 // 	}
 // }
 
-func main() {
-	close := make(chan bool)
-	articles := Hook("http://www.tagesanzeiger.ch/rss.html", DefaultLink, close)
 
-	for a := range articles {
-		log.Println("article", a.Title)
-	}
+func main() {
+    f := NewFetch(TagiFeeds(), DefaultLink)
+
+    go func () {
+        for a := range f.Articles {
+            log.Println("article", a.Title)
+        }
+    } ()
+
+    // f.Once()
+    article, _ := FirstArticle()
+    article.ExtractText()
+
 	//web.Get("/(.*)", hello)
 	//web.Run("0.0.0.0:9999")
 }

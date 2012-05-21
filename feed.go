@@ -9,30 +9,78 @@ import (
 
 type LinkChooser func(item *rss.Item) string
 
-func DefaultLink(item *rss.Item) string {
-	return item.Link
+type Fetch struct {
+	Urls        []string
+	Articles    chan *Article
+	LinkChooser LinkChooser
+
+	stopChannel    chan bool
+	stoppedChannel chan bool
 }
 
-func Hook(url string, linkChooser LinkChooser, close chan bool) chan *Article {
-	out := make(chan *Article)
+func NewFetch(urls []string, linkChooser LinkChooser) *Fetch {
+	var fetch = new(Fetch)
+
+	fetch.Urls = urls
+	fetch.LinkChooser = linkChooser
+	fetch.Articles = make(chan *Article)
+
+	return fetch
+}
+
+func (f *Fetch) Once() {
+	finished := make(chan bool)
+
+	for _, url := range f.Urls {
+		go func(u string) {
+			f.fetch(u)
+			finished <- true
+		}(url)
+	}
+
+	for i := 0; i < len(f.Urls); i++ {
+		<- finished
+	}
+}
+
+func (f *Fetch) Again(interval time.Duration) {
+	if f.stopChannel != nil {
+		f.Stop()
+	}
+
+	f.stopChannel = make(chan bool)
+	f.stoppedChannel = make(chan bool)
 
 	go func() {
-		fetch(url, linkChooser, out)
-
 		for {
 			select {
-			case <-time.After(time.Hour * 1):
-				fetch(url, linkChooser, out)
-			case <-close:
+			case <-time.After(interval):
+				f.Once()
+			case <-f.stopChannel:
+				f.stoppedChannel <- true
 				return
 			}
 		}
 	}()
-
-	return out
 }
 
-func fetch(url string, linkChooser LinkChooser, out chan *Article) {
+func (f *Fetch) Stop() {
+	if f.stopChannel == nil {
+		return
+	}
+
+	f.stopChannel <- true
+	<-f.stoppedChannel
+
+	f.stopChannel = nil
+	f.stoppedChannel = nil
+}
+
+func DefaultLink(item *rss.Item) string {
+	return item.Link
+}
+
+func (f *Fetch) fetch(url string) {
 	channel, err := rss.Read(url)
 
 	if err != nil {
@@ -40,7 +88,7 @@ func fetch(url string, linkChooser LinkChooser, out chan *Article) {
 	}
 
 	for _, item := range channel.Item {
-		link := linkChooser(item)
+		link := f.LinkChooser(item)
 
 		h := md5.New()
 		io.WriteString(h, link)
@@ -53,7 +101,7 @@ func fetch(url string, linkChooser LinkChooser, out chan *Article) {
 		article.PubDate, _ = time.Parse(time.RFC822, item.PubDate)
 		article.Summary = item.Description
 
-		out <- article
+		f.Articles <- article
 	}
 }
 

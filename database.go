@@ -17,28 +17,23 @@ func openConnection(database string) (db *mgo.Database, err error) {
 	}
 
 	db = session.DB(database)
-	err = db.Login(MongoUser, MongoPassword)
+	db.Login(MongoUser, MongoPassword)
 
 	return
 }
 
-func PrintFirstArticle() (err error) {
+func FirstArticle() (article *Article, err error) {
 	db, err := openConnection("tagi")
-
-	if db != nil {
-		defer db.Session.Close()
-	}
 
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
 
-	var result Article
+	defer db.Session.Close()
 
-	err = db.C("articles").Find(nil).One(&result)
+	article = new(Article)
+	err = db.C("articles").Find(nil).One(article)
 
-	log.Println(result)
-
-	return nil
+	return
 }
