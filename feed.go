@@ -39,7 +39,7 @@ func (f *Fetch) Once() {
 	}
 
 	for i := 0; i < len(f.Urls); i++ {
-		<- finished
+		<-finished
 	}
 }
 

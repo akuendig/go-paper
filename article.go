@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/base64"
-	"encoding/xml"
+	"errors"
+	"exp/html"
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"time"
-	"errors"
+)
+
+var (
+	ErrNoData = errors.New("No Data stored in SiteData")
+	ErrNoToken = errors.New("Not on a start tag")
 )
 
 type Article struct {
@@ -26,12 +30,18 @@ type Article struct {
 	} "site"
 }
 
-func (a *Article) SetSite(value io.Reader) error {
+func (a *Article) SetSite(reader io.Reader) error {
 	buffer := new(bytes.Buffer)
 	encoder := base64.NewEncoder(base64.StdEncoding, buffer)
 	writer := zlib.NewWriter(encoder)
 
-	_, err := io.Copy(writer, value)
+	_, err := io.Copy(writer, reader)
+
+	if err != nil {
+		return err
+	}
+
+	err = writer.Flush()
 
 	if err != nil {
 		return err
@@ -45,7 +55,7 @@ func (a *Article) SetSite(value io.Reader) error {
 
 func (a *Article) Site() (io.ReadCloser, error) {
 	if a.SiteData.Data == nil {
-		return ioutil.NopCloser(new(bytes.Buffer)), nil
+		return nil, ErrNoData
 	}
 
 	if a.SiteData.Compressed {
@@ -63,100 +73,10 @@ func (a *Article) DownloadWebsite() error {
 		return err
 	}
 
-	defer res.Body.Close()
-	a.SetSite(res.Body)
+	err = a.SetSite(res.Body)
+	res.Body.Close()
 
-	return nil
-}
-
-const selector = "html body div#mainWrapper div#mailLeftWrapper div#mainContainer div#singlePage div#singleLeft p"
-
-type xmlDecoder xml.Decoder
-
-func xmlExtract(reader io.Reader) string {
-	doc := xml.NewDecoder(reader)
-	doc.Strict = false
-
-	node, err := readUntilElement("div", "singleLeft", doc)
-
-	if err != nil {
-		log.Println(err)
-	} else {
-		log.Println(node.(xml.StartElement))
-	}
-
-	return ""
-}
-
-func readUntilElement(name, id string, doc *xml.Decoder) (xml.Token, error) {
-	for {
-		token, err := doc.Token()
-
-		if err != nil {
-			return nil, err
-		}
-
-		switch t := token.(type) {
-		case xml.StartElement:
-			if t.Name.Local != name {
-				break
-			}
-
-			if id == "" {
-				return t, nil
-			}
-
-			for _, attr := range t.Attr {
-				if attr.Name.Local == "id" && attr.Value == id {
-					return t, nil
-				}
-			}
-		case xml.EndElement:
-			// log.Println("EndElement")
-		case xml.Directive:
-			// log.Println("Directive", string(t))
-		case xml.CharData:
-			// log.Println("CharData", string(t))
-		case xml.Comment:
-			// log.Println("Comment", string(t))
-		case xml.ProcInst:
-			// log.Println("ProcInst", t)
-		}
-	}
-
-	return nil, errors.New(fmt.Sprint("Element", name, "not found"))
-}
-
-func (a *Article) ExtractText() string {
-	site, err := a.Site()
-
-	if err != nil {
-		log.Println(err)
-		return ""
-	}
-
-	defer site.Close()
-	xmlExtract(site)
- //    node, err := transform.NewDocFromReader(site)
-
-	// if err != nil {
-	// 	log.Println(err)
-	// 	return ""
-	// }
-
-	// selector := transform.NewSelectorQuery("div#singleLeft", "p", "p")
-	// matches := selector.Apply(node)
-
-	// if len(matches) < 1 {
-	// 	log.Println("No nodes found")
-	// 	return ""
-	// }
-
-	// for _, paragraph := range matches {
-	// 	log.Println(paragraph)
-	// }
-
-	return ""
+	return err
 }
 
 func (a Article) String() string {
@@ -167,4 +87,205 @@ func (a Article) String() string {
         published: %s
         link: %s
         compressed: %t`, a.Id, a.Title, a.Summary, a.PubDate, a.Link, a.SiteData.Compressed)
+}
+
+const selector = "html body div#mainWrapper div#mailLeftWrapper div#mainContainer div#singlePage div#singleLeft p"
+
+func (a *Article) ExtractText() (string, error) {
+	site, err := a.Site()
+
+	if err != nil {
+		return "", err
+	}
+
+	defer site.Close()
+
+	var query = query{nizer: html.NewTokenizer(site) }
+	err = query.moveAttr("id", "singleLeft")
+
+	if err != nil {
+		return "", err
+	}
+
+	err = query.moveTag("p")
+
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprint(query.current, string(query.nizer.Text())), nil
+}
+
+type query struct {
+	nizer *html.Tokenizer
+	current *html.Token
+}
+
+func (q *query) moveTag(tagName string) error {
+	var tnizer = q.nizer
+
+	for {
+		var tt = tnizer.Next()
+
+		if tt == html.ErrorToken {
+			q.current = nil
+			return tnizer.Err()
+		}
+
+		if tt == html.EndTagToken {
+			continue
+		}
+
+		var attrs []html.Attribute
+		name, moreAttr := tnizer.TagName()
+
+		if string(name) != tagName {
+			continue
+		}
+
+		for moreAttr {
+			var key, val []byte
+
+			key, val, moreAttr = tnizer.TagAttr()
+
+			attrs = append(attrs, html.Attribute{"", string(key), string(val)})
+		}
+
+		q.current = &html.Token{tt, string(name), attrs}
+		return nil
+	}
+
+	return tnizer.Err()
+}
+
+func (q *query) moveAttr(key, val string) error {
+	var tnizer = q.nizer
+
+	for {
+		var tt = tnizer.Next()
+
+		if tt == html.ErrorToken {
+			q.current = nil
+			return tnizer.Err()
+		}
+
+		if tt == html.EndTagToken {
+			continue
+		}
+
+		var attrs []html.Attribute
+		name, moreAttr := tnizer.TagName()
+
+		for moreAttr {
+			var key, val []byte
+			key, val, moreAttr = tnizer.TagAttr()
+
+			attrs = append(attrs, html.Attribute{"", string(key), string(val)})
+		}
+
+		for _, attr := range attrs {
+			if attr.Key == key && attr.Val == val {
+				q.current = &html.Token{tt, string(name), attrs}
+				return nil
+			}
+		}
+	}
+
+	return tnizer.Err()
+}
+
+func (q *query) node() (*Node, error) {
+	if q.current == nil || q.current.Type != html.StartTagToken {
+		return nil, ErrNoToken
+	}
+
+	var token html.Token
+	token = *q.current
+
+	var tnizer = q.nizer
+	var root = &Node{token.Data, "", token.Attr, nil, nil}
+
+	stack := new(nodeStack)
+	stack.push(root)
+
+	for stack.count() > 0 {
+		token = tnizer.Token()
+
+		switch token.Type {
+		case html.ErrorToken:
+			q.current = nil
+			return tnizer.Err()
+		case html.TextToken:
+			var cur = stack.peek()
+			cur.Text = token.Data
+		case html.CommentToken, html.DoctypeToken:
+			// TODO skipped
+		case html.StartTagToken:
+			var par = stack.peek()
+			var child = &Node{token.Data, "", token.Attr, nil}
+
+			par.Children = append(par.Children, child)
+			stack.push(child)
+		case html.SelfClosingTagToken:
+			var par = stack.peek()
+			var child = &Node{token.Data, "", token.Attr, nil}
+
+			par.Children = append(par.Children, child)
+		case html.EndTagToken:
+			var par = stack.pop()
+
+			if par.Name != token.Data {
+				fmt.Print("nonmaching end token", token, "Should be", par.Name)
+			}
+		default:
+			fmt.Print("unrecognized token:", token)
+		}
+	}
+
+	q.current = &token
+}
+
+type Node struct {
+	Name, Text string
+	Attributes []html.Attribute
+	Children []*Node
+}
+
+type nodeStack struct {
+	stack []*Node
+}
+
+func (s *nodeStack) count() int {
+	return len(s.stack)
+}
+
+func (s *nodeStack) clear() {
+	s.stack = nil
+}
+
+func (s *nodeStack) push(node *Node) {
+	s.stack = append(s.stack, node)
+}
+
+func (s *nodeStack) peek() *Node {
+	var l = len(s.stack)
+
+	if l == 0 {
+		return nil
+	}
+
+	return s.stack[l - 1]
+}
+
+func (s *nodeStack) pop() *Node {
+	var l = len(s.stack)
+
+	if l == 0 {
+		return nil
+	}
+
+	var res = s.stack[l-1]
+	s.stack = s.stack[:l-1]
+
+	return res
 }
