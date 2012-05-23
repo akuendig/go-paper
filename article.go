@@ -113,7 +113,13 @@ func (a *Article) ExtractText() (string, error) {
 		return "", err
 	}
 
-	return fmt.Sprint(query.current, string(query.nizer.Text())), nil
+	node, err := query.node()
+
+	if err != nil {
+		return "", err
+	}
+
+	return node.String(), nil
 }
 
 type query struct {
@@ -199,56 +205,107 @@ func (q *query) node() (*Node, error) {
 		return nil, ErrNoToken
 	}
 
-	var token html.Token
-	token = *q.current
-
 	var tnizer = q.nizer
-	var root = &Node{token.Data, "", token.Attr, nil, nil}
+	var root = &Node{q.current.Data, "", q.current.Attr, nil}
 
-	stack := new(nodeStack)
+	var stack = new(nodeStack)
 	stack.push(root)
 
 	for stack.count() > 0 {
-		token = tnizer.Token()
-
-		switch token.Type {
+		switch tnizer.Next() {
 		case html.ErrorToken:
 			q.current = nil
-			return tnizer.Err()
+			return nil, tnizer.Err()
 		case html.TextToken:
 			var cur = stack.peek()
-			cur.Text = token.Data
+			cur.Text = string(tnizer.Text())
 		case html.CommentToken, html.DoctypeToken:
 			// TODO skipped
 		case html.StartTagToken:
+			var attrs []html.Attribute
+			var name, moreAttr = tnizer.TagName()
+
+			for moreAttr {
+				var key, val []byte
+				key, val, moreAttr = tnizer.TagAttr()
+
+				attrs = append(attrs, html.Attribute{"", string(key), string(val)})
+			}
+
 			var par = stack.peek()
-			var child = &Node{token.Data, "", token.Attr, nil}
+			var child = &Node{string(name), "", attrs, nil}
 
 			par.Children = append(par.Children, child)
 			stack.push(child)
 		case html.SelfClosingTagToken:
+			var attrs []html.Attribute
+			name, moreAttr := tnizer.TagName()
+
+			for moreAttr {
+				var key, val []byte
+				key, val, moreAttr = tnizer.TagAttr()
+
+				attrs = append(attrs, html.Attribute{"", string(key), string(val)})
+			}
+
 			var par = stack.peek()
-			var child = &Node{token.Data, "", token.Attr, nil}
+			var child = &Node{string(name), "", attrs, nil}
 
 			par.Children = append(par.Children, child)
-		case html.EndTagToken:
+		case html.EndTagToken:GsLint
 			var par = stack.pop()
+			var name, _ = tnizer.TagName()
 
 			if par.Name != token.Data {
-				fmt.Print("nonmaching end token", token, "Should be", par.Name)
+				fmt.Println("Non maching end token", token, "Should be", par.Name)
 			}
 		default:
-			fmt.Print("unrecognized token:", token)
+			fmt.Println("unrecognized token:", token)
 		}
 	}
 
 	q.current = &token
+
+	return root, nil
 }
 
 type Node struct {
 	Name, Text string
 	Attributes []html.Attribute
 	Children []*Node
+}
+
+func (n Node) String() string {
+	var writer = new(bytes.Buffer)
+
+	(&n).toString(writer)
+
+	return string(writer.Bytes())
+}
+
+type StringRuneWriter interface {
+	Write(p []byte) (n int, err error)
+	WriteRune(r rune) (n int, err error)
+	WriteString(s string) (n int, err error)
+}
+
+func (n *Node) toString(writer StringRuneWriter) {
+	writer.WriteRune('<')
+	writer.WriteString(n.Name)
+
+	for _, attr := range n.Attributes {
+		fmt.Fprint(writer, " ", attr.Key, "=", attr.Val)
+	}
+
+	writer.WriteRune('>')
+
+	for _, child := range n.Children {
+		child.toString(writer)
+	}
+
+	writer.WriteString("</")
+	writer.WriteString(n.Name)
+	writer.WriteRune('>')
 }
 
 type nodeStack struct {
