@@ -212,59 +212,44 @@ func (q *query) node() (*Node, error) {
 	stack.push(root)
 
 	for stack.count() > 0 {
+
 		switch tnizer.Next() {
+
 		case html.ErrorToken:
 			q.current = nil
 			return nil, tnizer.Err()
 		case html.TextToken:
 			var cur = stack.peek()
-			cur.Text = string(tnizer.Text())
+			cur.Text += string(tnizer.Text())
 		case html.CommentToken, html.DoctypeToken:
 			// TODO skipped
 		case html.StartTagToken:
-			var attrs []html.Attribute
-			var name, moreAttr = tnizer.TagName()
-
-			for moreAttr {
-				var key, val []byte
-				key, val, moreAttr = tnizer.TagAttr()
-
-				attrs = append(attrs, html.Attribute{"", string(key), string(val)})
-			}
-
+			var token = tnizer.Token()
 			var par = stack.peek()
-			var child = &Node{string(name), "", attrs, nil}
+			var child = &Node{token.Data, "", token.Attr, nil}
 
 			par.Children = append(par.Children, child)
 			stack.push(child)
 		case html.SelfClosingTagToken:
-			var attrs []html.Attribute
-			name, moreAttr := tnizer.TagName()
-
-			for moreAttr {
-				var key, val []byte
-				key, val, moreAttr = tnizer.TagAttr()
-
-				attrs = append(attrs, html.Attribute{"", string(key), string(val)})
-			}
-
+			var token = tnizer.Token()
 			var par = stack.peek()
-			var child = &Node{string(name), "", attrs, nil}
+			var child = &Node{token.Data, "", token.Attr, nil}
 
 			par.Children = append(par.Children, child)
-		case html.EndTagToken:GsLint
+		case html.EndTagToken:
 			var par = stack.pop()
 			var name, _ = tnizer.TagName()
 
-			if par.Name != token.Data {
-				fmt.Println("Non maching end token", token, "Should be", par.Name)
+			if par.Name != string(name) {
+				fmt.Println("Non maching end token", string(name), "Should be", par.Name)
 			}
 		default:
-			fmt.Println("unrecognized token:", token)
+			var name, _ = tnizer.TagName()
+			fmt.Println("unrecognized token:", string(name))
 		}
 	}
 
-	q.current = &token
+	q.current = nil
 
 	return root, nil
 }
@@ -311,6 +296,8 @@ func (n *Node) toString(writer StringRuneWriter) {
 type nodeStack struct {
 	stack []*Node
 }
+
+type MyTokenizer html.Tokenizer
 
 func (s *nodeStack) count() int {
 	return len(s.stack)
