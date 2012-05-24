@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/zlib"
 	"encoding/base64"
 	"errors"
@@ -14,7 +15,7 @@ import (
 )
 
 var (
-	ErrNoData = errors.New("No Data stored in SiteData")
+	ErrNoData  = errors.New("No Data stored in SiteData")
 	ErrNoToken = errors.New("Not on a start tag")
 )
 
@@ -24,6 +25,7 @@ type Article struct {
 	Summary  string
 	PubDate  time.Time "pubDate"
 	Link     string
+	Website  []byte
 	SiteData struct {
 		Data       []byte
 		Compressed bool
@@ -32,8 +34,7 @@ type Article struct {
 
 func (a *Article) SetSite(reader io.Reader) error {
 	buffer := new(bytes.Buffer)
-	encoder := base64.NewEncoder(base64.StdEncoding, buffer)
-	writer := zlib.NewWriter(encoder)
+	writer, _ := flate.NewWriter(buffer, flate.BestCompression)
 
 	_, err := io.Copy(writer, reader)
 
@@ -41,19 +42,22 @@ func (a *Article) SetSite(reader io.Reader) error {
 		return err
 	}
 
-	err = writer.Flush()
+	err = writer.Close()
 
 	if err != nil {
 		return err
 	}
 
-	a.SiteData.Data = buffer.Bytes()
-	a.SiteData.Compressed = true
+	a.Website = buffer.Bytes()
 
 	return nil
 }
 
 func (a *Article) Site() (io.ReadCloser, error) {
+	if a.Website != nil {
+		return flate.NewReader(bytes.NewReader(a.Website)), nil
+	}
+
 	if a.SiteData.Data == nil {
 		return nil, ErrNoData
 	}
@@ -100,236 +104,103 @@ func (a *Article) ExtractText() (string, error) {
 
 	defer site.Close()
 
-	var query = query{nizer: html.NewTokenizer(site) }
-	err = query.moveAttr("id", "singleLeft")
+	// var query = query{nizer: html.NewTokenizer(site) }
+	// err = query.moveAttr("id", "singleLeft")
+
+	// if err != nil {
+	// 	return "", err
+	// }
+
+	// err = query.moveTag("p")
+
+	// if err != nil {
+	// 	return "", err
+	// }
+
+	root, err := html.Parse(site)
 
 	if err != nil {
 		return "", err
 	}
 
-	err = query.moveTag("p")
+	var buffer = new(bytes.Buffer)
+	html.Render(buffer, toNode(root).nextId("singleLeft").nextTag("p").toNode())
 
-	if err != nil {
-		return "", err
-	}
-
-	node, err := query.node()
-
-	if err != nil {
-		return "", err
-	}
-
-	return node.String(), nil
+	return string(buffer.Bytes()), nil
 }
 
-type query struct {
-	nizer *html.Tokenizer
-	current *html.Token
+type node html.Node
+
+func toNode(n *html.Node) *node {
+	return (*node)(n)
 }
 
-func (q *query) moveTag(tagName string) error {
-	var tnizer = q.nizer
-
-	for {
-		var tt = tnizer.Next()
-
-		if tt == html.ErrorToken {
-			q.current = nil
-			return tnizer.Err()
-		}
-
-		if tt == html.EndTagToken {
-			continue
-		}
-
-		var attrs []html.Attribute
-		name, moreAttr := tnizer.TagName()
-
-		if string(name) != tagName {
-			continue
-		}
-
-		for moreAttr {
-			var key, val []byte
-
-			key, val, moreAttr = tnizer.TagAttr()
-
-			attrs = append(attrs, html.Attribute{"", string(key), string(val)})
-		}
-
-		q.current = &html.Token{tt, string(name), attrs}
-		return nil
-	}
-
-	return tnizer.Err()
+func (n *node) toNode() *html.Node {
+	return (*html.Node)(n)
 }
 
-func (q *query) moveAttr(key, val string) error {
-	var tnizer = q.nizer
+type predicate func(n *node) bool
 
-	for {
-		var tt = tnizer.Next()
+func (n *node) isTag(tag string) bool {
+	return n.Type == html.ElementNode && n.Data == tag
+}
 
-		if tt == html.ErrorToken {
-			q.current = nil
-			return tnizer.Err()
-		}
-
-		if tt == html.EndTagToken {
-			continue
-		}
-
-		var attrs []html.Attribute
-		name, moreAttr := tnizer.TagName()
-
-		for moreAttr {
-			var key, val []byte
-			key, val, moreAttr = tnizer.TagAttr()
-
-			attrs = append(attrs, html.Attribute{"", string(key), string(val)})
-		}
-
-		for _, attr := range attrs {
-			if attr.Key == key && attr.Val == val {
-				q.current = &html.Token{tt, string(name), attrs}
-				return nil
-			}
+func (n *node) hasAttribute(key, val string) bool {
+	for _, a := range n.Attr {
+		if a.Key == key && a.Val == val {
+			return true
 		}
 	}
 
-	return tnizer.Err()
+	return false
 }
 
-func (q *query) node() (*Node, error) {
-	if q.current == nil || q.current.Type != html.StartTagToken {
-		return nil, ErrNoToken
-	}
-
-	var tnizer = q.nizer
-	var root = &Node{q.current.Data, "", q.current.Attr, nil}
-
-	var stack = new(nodeStack)
-	stack.push(root)
-
-	for stack.count() > 0 {
-
-		switch tnizer.Next() {
-
-		case html.ErrorToken:
-			q.current = nil
-			return nil, tnizer.Err()
-		case html.TextToken:
-			var cur = stack.peek()
-			cur.Text += string(tnizer.Text())
-		case html.CommentToken, html.DoctypeToken:
-			// TODO skipped
-		case html.StartTagToken:
-			var token = tnizer.Token()
-			var par = stack.peek()
-			var child = &Node{token.Data, "", token.Attr, nil}
-
-			par.Children = append(par.Children, child)
-			stack.push(child)
-		case html.SelfClosingTagToken:
-			var token = tnizer.Token()
-			var par = stack.peek()
-			var child = &Node{token.Data, "", token.Attr, nil}
-
-			par.Children = append(par.Children, child)
-		case html.EndTagToken:
-			var par = stack.pop()
-			var name, _ = tnizer.TagName()
-
-			if par.Name != string(name) {
-				fmt.Println("Non maching end token", string(name), "Should be", par.Name)
-			}
-		default:
-			var name, _ = tnizer.TagName()
-			fmt.Println("unrecognized token:", string(name))
+func (n *node) hasAttributes(attr map[string]string) bool {
+	for _, a := range n.Attr {
+		if attr[a.Key] == a.Val {
+			delete(attr, a.Key)
 		}
 	}
 
-	q.current = nil
-
-	return root, nil
+	return len(attr) == 0
 }
 
-type Node struct {
-	Name, Text string
-	Attributes []html.Attribute
-	Children []*Node
-}
-
-func (n Node) String() string {
-	var writer = new(bytes.Buffer)
-
-	(&n).toString(writer)
-
-	return string(writer.Bytes())
-}
-
-type StringRuneWriter interface {
-	Write(p []byte) (n int, err error)
-	WriteRune(r rune) (n int, err error)
-	WriteString(s string) (n int, err error)
-}
-
-func (n *Node) toString(writer StringRuneWriter) {
-	writer.WriteRune('<')
-	writer.WriteString(n.Name)
-
-	for _, attr := range n.Attributes {
-		fmt.Fprint(writer, " ", attr.Key, "=", attr.Val)
+func (n *node) where(pred predicate) *node {
+	if pred(n) {
+		return n
 	}
 
-	writer.WriteRune('>')
+	for _, child := range n.Child {
+		var res = (*node)(child).where(pred)
 
-	for _, child := range n.Children {
-		child.toString(writer)
+		if res != nil {
+			return res
+		}
 	}
 
-	writer.WriteString("</")
-	writer.WriteString(n.Name)
-	writer.WriteRune('>')
+	return nil
 }
 
-type nodeStack struct {
-	stack []*Node
+func (n *node) descendants(pred predicate) []*node {
+	var res []*node
 }
 
-type MyTokenizer html.Tokenizer
+func (n *node) descendantsRec(pred predicate, res []*node) {
 
-func (s *nodeStack) count() int {
-	return len(s.stack)
+func (n *node) nextId(id string) *node {
+	return n.where(func(n *node) bool {
+		return n.hasAttribute("id", id)
+	})
 }
 
-func (s *nodeStack) clear() {
-	s.stack = nil
+func (n *node) nextTag(tag string) *node {
+	return n.where(func(n *node) bool {
+		return n.isTag(tag)
+	})
 }
 
-func (s *nodeStack) push(node *Node) {
-	s.stack = append(s.stack, node)
-}
-
-func (s *nodeStack) peek() *Node {
-	var l = len(s.stack)
-
-	if l == 0 {
-		return nil
-	}
-
-	return s.stack[l - 1]
-}
-
-func (s *nodeStack) pop() *Node {
-	var l = len(s.stack)
-
-	if l == 0 {
-		return nil
-	}
-
-	var res = s.stack[l-1]
-	s.stack = s.stack[:l-1]
-
-	return res
+func (n *node) nextClass(class string) *node {
+	return n.where(func(n *node) bool {
+		return n.hasAttribute("class", class)
+	})
 }
