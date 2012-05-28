@@ -123,10 +123,13 @@ func (a *Article) ExtractText() (string, error) {
 		return "", err
 	}
 
-	var buffer = new(bytes.Buffer)
-	html.Render(buffer, toNode(root).nextId("singleLeft").nextTag("p").toNode())
+	var r = toNode(root)
+	var sL = r.getId("singleLeft")
+	var p = sL.descendants(func(n *node) bool {
+		return n.isTag("p")
+	})
 
-	return string(buffer.Bytes()), nil
+	return fmt.Sprint(p), nil
 }
 
 type node html.Node
@@ -137,6 +140,14 @@ func toNode(n *html.Node) *node {
 
 func (n *node) toNode() *html.Node {
 	return (*html.Node)(n)
+}
+
+func (n *node) String() string {
+	var buffer = new(bytes.Buffer)
+
+	html.Render(buffer, n.toNode())
+
+	return string(buffer.Bytes())
 }
 
 type predicate func(n *node) bool
@@ -171,7 +182,7 @@ func (n *node) where(pred predicate) *node {
 	}
 
 	for _, child := range n.Child {
-		var res = (*node)(child).where(pred)
+		var res = toNode(child).where(pred)
 
 		if res != nil {
 			return res
@@ -182,12 +193,40 @@ func (n *node) where(pred predicate) *node {
 }
 
 func (n *node) descendants(pred predicate) []*node {
-	var res []*node
+	var res nodeVector
+
+	descendantsRec(n, pred, &res)
+
+	return res.arr
 }
 
-func (n *node) descendantsRec(pred predicate, res []*node) {
+func descendantsRec(n *node, pred predicate, res *nodeVector) {
+	if pred(n) {
+		res.push(n)
+	}
 
-func (n *node) nextId(id string) *node {
+	for _, child := range n.Child {
+		descendantsRec(toNode(child), pred, res)
+	}
+}
+
+func (n *node) descendant(pred predicate) *node {
+	if pred(n) {
+		return n
+	}
+
+	for _, child := range n.Child {
+		var found = toNode(child).descendant(pred)
+
+		if found != nil {
+			return found
+		}
+	}
+
+	return nil
+}
+
+func (n *node) getId(id string) *node {
 	return n.where(func(n *node) bool {
 		return n.hasAttribute("id", id)
 	})
@@ -203,4 +242,12 @@ func (n *node) nextClass(class string) *node {
 	return n.where(func(n *node) bool {
 		return n.hasAttribute("class", class)
 	})
+}
+
+type nodeVector struct {
+	arr []*node
+}
+
+func (s *nodeVector) push(val *node) {
+	s.arr = append(s.arr, val)
 }
