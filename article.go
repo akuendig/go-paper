@@ -20,19 +20,27 @@ var (
 )
 
 type Article struct {
-	Id       string
-	Title    string
-	Summary  string
-	PubDate  time.Time "pubDate"
-	Link     string
-	Website  []byte
-	SiteData *struct {
+	Id         string
+	Title      string
+	Summary    string
+	PubDate    time.Time "pubDate"
+	Link       string
+	WebsiteRaw []byte
+	SiteData   *struct {
 		Data       []byte
 		Compressed bool
 	} "site"
 }
 
-func (a *Article) SetSite(reader io.Reader) error {
+func (a *Article) Website() io.ReadCloser {
+	if a.WebsiteRaw != nil {
+		return flate.NewReader(bytes.NewReader(a.WebsiteRaw))
+	}
+
+	return nil
+}
+
+func (a *Article) SetWebsite(reader io.Reader) error {
 	buffer := new(bytes.Buffer)
 	writer, _ := flate.NewWriter(buffer, flate.BestCompression)
 
@@ -44,16 +52,12 @@ func (a *Article) SetSite(reader io.Reader) error {
 		return err
 	}
 
-	a.Website = buffer.Bytes()
+	a.WebsiteRaw = buffer.Bytes()
 
 	return nil
 }
 
 func (a *Article) Site() (io.ReadCloser, error) {
-	if a.Website != nil {
-		return flate.NewReader(bytes.NewReader(a.Website)), nil
-	}
-
 	if a.SiteData == nil || a.SiteData.Data == nil {
 		return nil, ErrNoData
 	}
@@ -66,53 +70,44 @@ func (a *Article) Site() (io.ReadCloser, error) {
 	return ioutil.NopCloser(bytes.NewReader(a.SiteData.Data)), nil
 }
 
-func (a *Article) DownloadWebsite() error {
-	res, err := http.Get(a.Link)
+func (a *Article) DownloadWebsite() (io.ReadCloser, error) {
+	var response, err = http.Get(a.Link)
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	err = a.SetSite(res.Body)
-	res.Body.Close()
-
-	return err
+	return response.Body, nil
 }
 
-func (a Article) String() string {
+func (a *Article) String() string {
 	return fmt.Sprintf(
 		`id: %s
         title: %s
         summary: %s
         published: %s
-        link: %s
-        compressed: %t`, a.Id, a.Title, a.Summary, a.PubDate, a.Link, a.SiteData.Compressed)
+        link: %s`, a.Id, a.Title, a.Summary, a.PubDate, a.Link)
 }
 
-const selector = "html body div#mainWrapper div#mailLeftWrapper div#mainContainer div#singlePage div#singleLeft p"
-
-func (a *Article) ExtractText() (string, error) {
-	site, err := a.Site()
-
-	if err != nil {
-		return "", err
-	}
-
-	defer site.Close()
-
-	root, err := html.Parse(site)
+// "html body div#mainWrapper div#mailLeftWrapper div#mainContainer div#singlePage div#singleLeft p"
+func extractText(reader io.Reader) (io.Reader, error) {
+	root, err := html.Parse(reader)
 
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	var r = toNode(root)
-	var sL = r.getId("singleLeft")
-	var p = sL.descendants(func(n *node) bool {
-		return n.isTag("p")
-	})
+	var sL = r.descendant(Id("singlePage"))
+	var p = sL.descendants(Tag("p"))
+	var buffer = new(bytes.Buffer)
 
-	return fmt.Sprint(p), nil
+	for _, node := range p {
+		html.Render(buffer, node.toNode())
+		buffer.WriteByte('\n')
+	}
+
+	return buffer, nil
 }
 
 type node html.Node
@@ -134,6 +129,24 @@ func (n *node) String() string {
 }
 
 type predicate func(n *node) bool
+
+func Id(id string) predicate {
+	return func(n *node) bool {
+		return n.hasAttribute("id", id)
+	}
+}
+
+func Tag(tag string) predicate {
+	return func(n *node) bool {
+		return n.isTag(tag)
+	}
+}
+
+func Class(class string) predicate {
+	return func(n *node) bool {
+		return n.hasAttribute("class", class)
+	}
+}
 
 func (n *node) isTag(tag string) bool {
 	return n.Type == html.ElementNode && n.Data == tag
@@ -157,22 +170,6 @@ func (n *node) hasAttributes(attr map[string]string) bool {
 	}
 
 	return len(attr) == 0
-}
-
-func (n *node) where(pred predicate) *node {
-	if pred(n) {
-		return n
-	}
-
-	for _, child := range n.Child {
-		var res = toNode(child).where(pred)
-
-		if res != nil {
-			return res
-		}
-	}
-
-	return nil
 }
 
 func (n *node) descendants(pred predicate) []*node {
@@ -207,24 +204,6 @@ func (n *node) descendant(pred predicate) *node {
 	}
 
 	return nil
-}
-
-func (n *node) getId(id string) *node {
-	return n.where(func(n *node) bool {
-		return n.hasAttribute("id", id)
-	})
-}
-
-func (n *node) nextTag(tag string) *node {
-	return n.where(func(n *node) bool {
-		return n.isTag(tag)
-	})
-}
-
-func (n *node) nextClass(class string) *node {
-	return n.where(func(n *node) bool {
-		return n.hasAttribute("class", class)
-	})
 }
 
 type nodeVector struct {
