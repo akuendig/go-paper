@@ -26,7 +26,7 @@ type Article struct {
 	PubDate  time.Time "pubDate"
 	Link     string
 	Website  []byte
-	SiteData struct {
+	SiteData *struct {
 		Data       []byte
 		Compressed bool
 	} "site"
@@ -36,15 +36,11 @@ func (a *Article) SetSite(reader io.Reader) error {
 	buffer := new(bytes.Buffer)
 	writer, _ := flate.NewWriter(buffer, flate.BestCompression)
 
-	_, err := io.Copy(writer, reader)
-
-	if err != nil {
+	if _, err := io.Copy(writer, reader); err != nil {
 		return err
 	}
 
-	err = writer.Close()
-
-	if err != nil {
+	if err := writer.Close(); err != nil {
 		return err
 	}
 
@@ -58,7 +54,7 @@ func (a *Article) Site() (io.ReadCloser, error) {
 		return flate.NewReader(bytes.NewReader(a.Website)), nil
 	}
 
-	if a.SiteData.Data == nil {
+	if a.SiteData == nil || a.SiteData.Data == nil {
 		return nil, ErrNoData
 	}
 
@@ -103,19 +99,6 @@ func (a *Article) ExtractText() (string, error) {
 	}
 
 	defer site.Close()
-
-	// var query = query{nizer: html.NewTokenizer(site) }
-	// err = query.moveAttr("id", "singleLeft")
-
-	// if err != nil {
-	// 	return "", err
-	// }
-
-	// err = query.moveTag("p")
-
-	// if err != nil {
-	// 	return "", err
-	// }
 
 	root, err := html.Parse(site)
 
