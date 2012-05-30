@@ -90,7 +90,7 @@ func (a *Article) String() string {
 }
 
 // "html body div#mainWrapper div#mailLeftWrapper div#mainContainer div#singlePage div#singleLeft p"
-func extractText(reader io.Reader) (io.Reader, error) {
+func ExtractText(reader io.Reader) (io.Reader, error) {
 	root, err := html.Parse(reader)
 
 	if err != nil {
@@ -98,8 +98,18 @@ func extractText(reader io.Reader) (io.Reader, error) {
 	}
 
 	var r = toNode(root)
-	var sL = r.descendant(Id("singlePage"))
-	var p = sL.descendants(Tag("p"))
+	var sp = r.descendant(Id("singlePage"))
+
+	if sp == nil {
+		return nil, errors.New("singlePage not found \n" + r.String())
+	}
+
+	var p = sp.descendants(Tag("p"))
+
+	if p == nil {
+		return nil, errors.New("p's not found \n" + r.String())
+	}
+
 	var buffer = new(bytes.Buffer)
 
 	for _, node := range p {
