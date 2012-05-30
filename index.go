@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	batchSize = 50
+	batchSize = 100
 )
 
 func main() {
@@ -23,6 +23,11 @@ func main() {
 		}
 
 		for _, a := range batch {
+			if a.WebsiteRaw != nil {
+				a.SiteData = nil
+				continue
+			}
+
 			var site, err = a.Site()
 
 			if err == ErrNoData {
@@ -30,14 +35,16 @@ func main() {
 			}
 
 			if err != nil {
-				log.Fatal(err)
+				log.Println("Error at id", a.Id)
+				continue
 			}
 
 			defer site.Close()
 			text, err := ExtractText(site)
 
 			if err != nil {
-				log.Fatal(err)
+				log.Println("Error at id", a.Id)
+				continue
 			}
 
 			if err := a.SetWebsite(text); err != nil {
