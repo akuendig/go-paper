@@ -89,8 +89,7 @@ func (a *Article) String() string {
         link: %s`, a.Id, a.Title, a.Summary, a.PubDate, a.Link)
 }
 
-// "html body div#mainWrapper div#mailLeftWrapper div#mainContainer div#singlePage div#singleLeft p"
-func ExtractText(reader io.Reader) (io.Reader, error) {
+func ExtractTagi(reader io.Reader) (io.Reader, error) {
 	root, err := html.Parse(reader)
 
 	if err != nil {
@@ -98,6 +97,9 @@ func ExtractText(reader io.Reader) (io.Reader, error) {
 	}
 
 	var r = toNode(root)
+
+	defer r.Dispose()
+
 	var sp = r.descendant(Id("singlePage"))
 
 	if sp == nil {
@@ -120,6 +122,27 @@ func ExtractText(reader io.Reader) (io.Reader, error) {
 	return buffer, nil
 }
 
+func ExtractBlickOld(reader io.Reader) (io.Reader, error) {
+	root, err := html.Parse(reader)
+
+	if err != nil {
+		return nil, err
+	}
+
+	var r = toNode(root)
+	defer r.Dispose()
+
+	var art = r.descendant(Class("article"))
+	if art == nil {
+		return nil, errors.New("article not found \n" + r.String())
+	}
+
+	var buffer = new(bytes.Buffer)
+	html.Render(buffer, art.toNode())
+
+	return buffer, nil
+}
+
 type node html.Node
 
 func toNode(n *html.Node) *node {
@@ -136,6 +159,15 @@ func (n *node) String() string {
 	html.Render(buffer, n.toNode())
 
 	return string(buffer.Bytes())
+}
+
+func (n *node) Dispose() {
+	for _, child := range n.Child {
+		toNode(child).Dispose()
+	}
+
+	n.Parent = nil
+	n.Child = nil
 }
 
 type predicate func(n *node) bool
