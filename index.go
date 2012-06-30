@@ -2,9 +2,8 @@ package main
 
 import (
 	"log"
-	"regexp"
 	"net/http"
-	_ "net/http/pprof"
+	"regexp"
 )
 
 const (
@@ -54,6 +53,7 @@ func CompactBlick() {
 
 		for _, a := range batch {
 			if a.WebsiteRaw != nil {
+				// Site was already compressed
 				a.SiteData = nil
 				continue
 			}

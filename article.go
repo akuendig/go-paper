@@ -161,6 +161,7 @@ func (n *node) String() string {
 	return string(buffer.Bytes())
 }
 
+// Set all child references recursively to null such that there are no cycles in memory
 func (n *node) Dispose() {
 	for _, child := range n.Child {
 		toNode(child).Dispose()
